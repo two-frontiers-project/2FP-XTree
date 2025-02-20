@@ -1,7 +1,7 @@
 // Gabriel Al-Ghalith. Efficient characterization of orthogonal metagenomic
 //  taxonomy and pathway coverage with CrossTree. 2018.
-#define VER "CrossTree v0.92i by Gabe"
-#define VNO 1
+#define VER "CrossTree v2.00c 'ADAMANT WEAKSAUCE' by Gabe"
+#define VNO 5
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -19,9 +19,10 @@
 #ifndef kmer_t
 	#define kmer_t uint32_t
 #endif
-#ifndef rix_t
-	#define rix_t uint32_t
+#ifndef PFXLEN
+	#define PFXLEN 13
 #endif
+#define rix_t uint32_t
 #define AMBIG 4
 #include <math.h>
 #include <zlib.h>
@@ -39,6 +40,11 @@ void * huge_calloc(size_t n) {
 }
 const uint8_t CONV[32]  = {4,0,4,1,4,4,4,2,4,4,4,4,4,4,4,4,4,4,4,4,3,3,4,4,4,4,4,4,4,4,4,4};
 const uint8_t RCONV[32] = {4,3,4,2,4,4,4,1,4,4,4,4,4,4,4,4,4,4,4,4,0,0,4,4,4,4,4,4,4,4,4,4};
+const uint8_t RCONS[32] = {'N','T','N','G','N','N','N','C','N','N','N','N','N','N','N','N',
+						   'N','N','N','N','A','A','N','N','N','N','N','N','N','N','N','N'};
+uint8_t FLTF1_1[5] = {1,0,0,0,0}, FLTF2_1[5] = {0,1,1,1,0}, FLTF2_2[5] = {0,1,0,0,0};
+uint8_t FLTR1_1[5] = {0,0,0,1,0}, FLTR2_1[5] = {1,1,1,0,0}, FLTR2_2[5] = {0,0,1,0,0};
+
 
 #pragma pack(1)
 typedef struct {
@@ -58,23 +64,6 @@ int binCmp(const void *a, const void *b) {
 	return valA < valB ? -1 : valB < valA;
 }
 
-static inline uint32_t prefix_to_num(char *s, int nl, int *err, uint32_t kshift) {
-	uint32_t nib = 0, k = kshift;
-	for (uint32_t i = 0; i < nl; ++i, k-=2) {
-		uint32_t c = CONV[31 & s[i]];
-		if (c == AMBIG) {*err = 1; return i;}
-		nib |= c << k;
-	}
-	return nib;
-}
-static inline uint32_t prefix_to_num_RC(char *s, int nl) {
-	uint32_t nib = 0, k = 0, c;
-	for (uint32_t i = 0; i < nl; ++i, k+=2) 
-		c = RCONV[31 & s[i]],
-		nib |= c << k;
-	return nib;
-}
-
 static inline kmer_t dna_to_num(char *s, int nl, int *err, kmer_t kshift) {
 	kmer_t nib = 0, k = kshift;
 	for (uint32_t i = 0; i < nl; ++i, k-=2) {
@@ -84,14 +73,16 @@ static inline kmer_t dna_to_num(char *s, int nl, int *err, kmer_t kshift) {
 	}
 	return nib;
 }
-static inline kmer_t dna_to_num_RC(char *s, int nl) {
-	kmer_t nib = 0, k = 0, c;
-	for (uint32_t i = 0; i < nl; ++i, k+=2) 
-		c = RCONV[31 & s[i]],
-		nib |= c << k;
-	return nib;
+
+
+// As a convenience function, let's also define the opposite of the above, num_to_dna
+static inline char * num_to_dna(kmer_t num, int nl, char *s) {
+	for (int i = nl-1; i >= 0; --i, num >>= 2)
+		s[i] = "ACGT"[num & 3];
+	return s;
 }
 
+// Key string delimited by null
 static inline uint64_t binsearch_str(char **Strings, char *key, uint64_t N) {
 	uint64_t lo = 0, hi = N;
 	while (lo < hi) {
@@ -147,6 +138,13 @@ static inline int u16cmp(const void *a, const void *b) {
 	return *(uint16_t*)a < *(uint16_t*)b ? -1 : 
 		*(uint16_t*)b < *(uint16_t*)a;
 }
+// sort comparator like above but for kmer_t
+static inline int kcmp(const void *a, const void *b) {
+	kmer_t k1 = *(kmer_t *)a, k2 = *(kmer_t *)b;
+	return k1 < k2 ? -1 : k2 < k1;
+}
+
+
 static inline int kpackcmp(const void *a, const void *b) {
 	KPod *k1 = (KPod *)a, *k2 = (KPod *)b;
 	if (k1->sfx < k2->sfx) return -1;
@@ -156,17 +154,6 @@ static inline int kpackcmp(const void *a, const void *b) {
 	return 0;
 }
 
-/* static inline KPod * WBS_k(KPod *KP, uint64_t Lx, kmer_t k) {
-	KPod *p=KP;
-	while (Lx) {
-		size_t w = (Lx >> 1) + 1;
-		if (p[w].sfx < k) p+=w, Lx-=w; 
-		else if (p[w].sfx == k) return p+w;
-		else Lx = w-1;
-	}
-	return p->sfx==k ? p : 0;
-} */
-
 static inline uint64_t LBS_k(KPod *KP, uint64_t N, kmer_t k) {
 	uint64_t L = 0, R = N;
 	while (L < R) {
@@ -174,9 +161,21 @@ static inline uint64_t LBS_k(KPod *KP, uint64_t N, kmer_t k) {
 		if (KP[m].sfx < k) L = m+1;
 		else R = m;
 	}
-	return KP[L].sfx == k ? L : -1;
+	return (L < N && KP[L].sfx == k) ? L : -1;
 }
 
+// Mirror of the above binary search but just for kmer_t 
+static inline uint64_t skLBS(kmer_t *A, uint64_t N, kmer_t k) {
+	uint64_t L = 0, R = N;
+	while (L < R) {
+		uint64_t m = (L + R) >> 1;
+		if (A[m] < k) L = m+1;
+		else R = m;
+	}
+	return (L < N && A[L] == k) ? L : -1;
+}
+
+// Parses a fasta or fastq-formatted file, storing data in QBucket and HBucket, and returning the number of queries read
 static inline uint64_t get_queries(gzFile in, uint8_t **QBucket, char **HBucket, uint8_t *head, uint8_t *line, int qChunk, uint64_t szmax) {
 	uint64_t nq = 0; uint8_t *QB_ptr = *QBucket; char *H_ptr = *HBucket;
 	uint8_t *eol; int len;
@@ -207,13 +206,14 @@ static inline uint64_t get_queries(gzFile in, uint8_t **QBucket, char **HBucket,
 #define USAGE2 USAGE1 "Options for both BUILD and ALIGN, with args: {seqs,log-out,threads,db}\n"
 #define USAGE3 USAGE2 "BUILD Options\n  With args: {map,comp,k,db-out} <arg>\n"
 #define USAGE4 USAGE3 "ALIGN Options\n  With args: {confidence,perq-out,ref-out,tax-out,cov-out,orthog-out}\n"
-#define USAGE USAGE4 "  Without args: {redistribute,shallow-lca,copymem}"
+#define USAGE USAGE4 "  Without args: {redistribute,shallow-lca,copymem,doforage,half-forage,no-adamantium}\n"
 int main(int argc, char *argv[]) {
 	puts(VER);
 	char *dbPath = 0, *seqPath = 0, *ixPath = 0, *covPath = 0;
 	char *perqPath = 0, *taxPath = 0, *orthogPath = 0, *refPath = 0, *logPath = 0;
-	int doBuild = 0, threads = omp_get_max_threads(), comp = 0, kchoice = 0;
-	int doFullLCA = 1, doRedist = 0, doFastRedist = 0, doCopyMem = 0;
+	int doBuild = 0, threads = omp_get_max_threads(), comp = -1, kchoice = 0;
+	int doFullLCA = 1, doRedist = 0, doFastRedist = 0, doCopyMem = 0, doForage = 0, 
+		doHalfForage = 0, adamantium = 1;
 	double conf = 0.33; // Reasonable default for compression lv 2
 	uint32_t nUniqMatches = 0;
 	
@@ -239,7 +239,11 @@ int main(int argc, char *argv[]) {
 		else if (!strcmp(argv[a],"--fast-redistribute")) doRedist = 1, doFastRedist = 1; //NA
 		else if (!strcmp(argv[a],"--shallow-lca")) doFullLCA = 0; //NA
 		else if (!strcmp(argv[a],"--copymem")) doCopyMem = 1; //NA
-		
+		else if (!strcmp(argv[a],"--doforage")) doForage = 1; //NA
+		else if (!strcmp(argv[a],"--half-forage")) doHalfForage = 1; //NA
+		else if (!strcmp(argv[a],"--adamantium")) adamantium = 1; //NA
+		else if (!strcmp(argv[a],"--no-adamantium")) adamantium = 0; //NA
+	
 		
 		// Options for both BUILD and ALIGN
 		else if (!strcmp(argv[a],"--seqs")) seqPath = argv[++a]; 
@@ -250,15 +254,22 @@ int main(int argc, char *argv[]) {
 		
 		else {printf("Unrecognized option: %s\n",argv[a]); exit(1);}
 	}
-	threads = threads > 256 ? 256 : threads;
+	threads = threads > 4096 ? 4096 : threads;
+	comp=comp>2?2:comp; 
 	omp_set_num_threads(threads); 
 	printf("Using %d thread(s)\n",threads);
 	if (argc < 4) {puts(USAGE); exit(1);}
+
+	uint8_t *FltF1 = FLTF1_1, *FltF2 = FLTF2_1;
+	uint8_t *FltR1 = FLTR1_1, *FltR2 = FLTR2_1;
 	
 	if (doBuild) {
-		uint32_t PL = 13, SL = sizeof(kmer_t)*4;
+		uint32_t PL = PFXLEN, SL = sizeof(kmer_t)*4;
 		uint64_t K = PL+SL;
-		if (comp) printf("Setting compression level to %d\n",comp);
+		if (comp == -1) comp = 0; // Default compression level
+		if (comp > 2) {printf("Bad compression level! [%d] Range 0-2\n",comp); exit(1);}
+		printf("Setting compression level to %d\n",comp);
+		if (comp == 2) FltF2 = FLTF2_2, FltR2 = FLTR2_2;
 		
 		if (kchoice) K = kchoice;
 		SL = K - PL;
@@ -282,45 +293,72 @@ int main(int argc, char *argv[]) {
 		
 		// Set up the tank for input -- up to 1 billion refs allowed
 		uint64_t nbins = 1<<(2*PL),
-			*Offsets = huge_malloc(((uint64_t)1<<30)*sizeof(*Offsets)),
+			*Offsets = malloc(((uint64_t)1<<30)*sizeof(*Offsets)),
 			*Nibs = huge_calloc((nbins+1)*sizeof(*Nibs));
 		if (!Offsets || !Nibs) {puts("ERROR:OOM Offsets"); exit(3);}
 		uint32_t ns = 0;
+		//uint32_t mask32 = ((uint64_t)1 << (2*PL)) - 1;
+		uint32_t shifty = 32 - 2*PL; // shift to zero out extra letters in the prefix left over due to the type being larger than the prefix
+		kmer_t shifty2 = sizeof(kmer_t)*8 - 2*SL; // shift to zero out extra letters in the suffix left over due to the type being larger than the suffix
+		uint32_t rc_rshift_pfx = 2*(PL-1); // shift to put letter in first position of prefix
+		kmer_t rc_rshift_sfx = 2*(SL-1); // shift to put letter in first position of suffix
 		double wtime = omp_get_wtime();
-		#pragma omp parallel for
+		uint64_t n_prefices = 0;
+		/// KMER PREFIX COUNTING LOOP. Read a fasta record, decompose in to k-mers, and increment the prefix counts
+		#pragma omp parallel for reduction(+:n_prefices) 
 		for (uint64_t z = 0; z < fsz; ++z) {
-			if (Raw[z] > 64 && Raw[z-1] == '\n') {
+			// The trick is to ignore all new lines that begin with the header, so each iteration starts at a sequence and ends before the next header.
+			if (Raw[z] > 64 && Raw[z-1] == '\n') { // the ascii code 64 is the '@' symbol and 62 is '>', so looking above this means we're not at a header
 				uint32_t ix;
 				#pragma omp atomic capture
-				ix = ns++;
-				uint64_t x = z, y = z;
-				while (Raw[y] && Raw[y] != '\n') ++y;
+				ix = ns++; 
+				Offsets[ix] = z; // Store where each sequence starts
+				char *seq = Raw + z; // seq is a pointer to the beginning of the sequence
+				int64_t y = 0; while (seq[y] && seq[y] != '\n') ++y; // y is the last index in the sequence
+				// Loop over the sequence. This logic is further expanded to handle suffices in the "KMER BIN FILLING LOOP" later
+				int64_t lastAmbig = -1;
+				uint32_t pfx = 0, pfxRC = 0; // The prefix of the current k-mer. We can omit the sfx because we're only tallying prefixes here!
+				for (int64_t j = 0; j < y; ++j) { // Start at the prefix length, and go to the end of the sequence
+					uint32_t c = 0;  // c is the character we're looking at
+					if (j >= SL) c = CONV[31 & seq[j-SL]]; // Get binary conversion of the letter, lag by suffix len (we don't want to overlap it)
+					if (c==AMBIG) lastAmbig = j-SL, c = 0; // Mark last ambiguous position
+					pfx = pfx << 2 | c; // Shift the prefix left by 2 bits and tack the new character onto the end
+					pfx = pfx << shifty >> shifty; // Remove leftover bits
+					
+					// Now get the next character for the reverse complement's prefix
+					c = RCONV[31 & seq[j]]; // starts on the other end of the kmer, so no need to lag
+					c = c==AMBIG ? 0 : c; // Ambiguity already marked, so just cast to 0 ('A') to allow it to keep going
+					pfxRC = pfxRC >> 2 | (uint32_t)c << rc_rshift_pfx; // Shift the prefix right by 2 bits and tack the new character onto the beginning
+
+					// Also scan the current letter for ambigs so as to maintain parity with full k-mer scan later
+					if (CONV[31 & seq[j]]==AMBIG) lastAmbig = lastAmbig > j ? lastAmbig : j; // Mark last ambiguous position
 				
-				uint32_t num, slideSafe = 0;
-				Offsets[ix] = x; // Offsets contain start of sequence
-				while (x + K <= y) {
-					int err=0, a = 0; 
-					if (slideSafe) {
-						uint32_t c = CONV[31 & Raw[x+PL-1]];
-						if (c==AMBIG) {x+=PL; slideSafe=0; continue;}
-						num = (num << pre_bshf_2 >> pre_bshf) | c;
-					} else {
-						num = prefix_to_num(Raw+x,PL,&err,kpre_shf);
-						if (err) {x+= num+1; slideSafe = 0; continue;}
-						slideSafe = 1;
-					}
-					while (a < comp && !CONV[31 & Raw[x+a-comp]]) ++a; // compression
-					if (a == comp)
-						#pragma omp atomic
-						++Nibs[num];
-					++x;
+					// DEBUG: Print the prefix
+					/* char pfxstr[PL+1]; pfxstr[PL] = 0;
+					char pfxstrRC[PL+1]; pfxstrRC[PL] = 0;
+					//for (int i = PL-1; i >= 0; --i) pfxstr[i] = "ACGT"[3 & (pfx >> 2*i)];
+					num_to_dna(pfx,PL,pfxstr);
+					num_to_dna(pfxRC,PL,pfxstrRC);
+					printf("Ref %u, pos %u, pfx %s; pfxRC %s\n",ix,j-PL,pfxstr,pfxstrRC); */
+
+					// Take the minimum of the two prefixes (normal and reverse complement)
+					uint32_t final_pfx = pfx; 
+					if (pfxRC < pfx) final_pfx = pfxRC;
+					
+					// If the read head is past the last ambiguous position, our current k-mer is complete, so look it up
+					if (j >= lastAmbig + (int64_t)K) { 	
+						if (!comp || j > K && FltF1[CONV[31 & seq[j-K]]] && FltF2[CONV[31 & seq[j-K-1]]] || 
+								j < y - 1 && FltR1[CONV[31 & seq[j+1]]] && FltR2[CONV[31 & seq[j+2]]] ) { 
+							#pragma omp atomic
+							++Nibs[final_pfx]; // Increment the count for this prefix
+							n_prefices++; // 
+						} 
+					} 
 				}
 			}
 		}
-		printf("There were %u records here (%f s)\n",ns,omp_get_wtime()-wtime);
-		if (ns > 65535 && sizeof(rix_t) == 2) 
-			{puts("ERROR: too many refs (>65K)"); exit(2);}
-		//Offsets = realloc(Offsets,ns*sizeof(*Offsets));
+		printf("There were %u records here of %lu prefices (%f s)\n",ns,n_prefices, omp_get_wtime()-wtime);
+		Offsets = realloc(Offsets,ns*sizeof(*Offsets)); // Shrink the Offsets array to the correct size
 		qsort(Offsets,ns,sizeof(*Offsets),cmpfunc);
 		
 		// Create the data structures
@@ -331,6 +369,7 @@ int main(int argc, char *argv[]) {
 		printf("Now allocating %f GB of RAM...\n",(double)totWords*sizeof(KPod)/1073741824);
 		wtime = omp_get_wtime();
 		
+		uint32_t *Lengths = malloc(ns*sizeof(*Lengths)); 
 		KPod *KGrid = huge_malloc(totWords*sizeof(*KGrid));
 		uint64_t *KIx = huge_calloc((nbins+1)*sizeof(*KIx));
 		if (!KIx) {puts("OOM:KIx"); exit(3);}
@@ -338,50 +377,83 @@ int main(int argc, char *argv[]) {
 			KIx[i] = KIx[i-1] + Nibs[i-1];
 		for (uint64_t i = 0; i < nbins; ++i) Nibs[i] = KIx[i];
 		
-		#ifdef WSL
-		for (uint64_t i = 0; i < totWords; i+=4096/sizeof(*KGrid)) 
-			KGrid[i].sfx=1;
-		#endif
-		
-		uint32_t mask32 = ((uint64_t)1 << (2*PL)) - 1;
-		kmer_t maskK = ((kmer_t)1 << (2*SL)) - 1;
-		if (SL==sizeof(kmer_t)*4) maskK = -1;
-		#pragma omp parallel for schedule(dynamic)
+		// Remember: PL is the prefix length, SL is the suffix length, and K is the k-mer length (PL+SL). 
+		//uint32_t shifty = 32 - 2*PL; // shift to zero out extra letters in the prefix left over due to the type being larger than the prefix
+		//kmer_t shifty2 = sizeof(kmer_t)*8 - 2*SL; // shift to zero out extra letters in the suffix left over due to the type being larger than the suffix
+		//uint32_t rc_rshift_pfx = 2*(PL-1); // shift to put letter in first position of prefix
+		//kmer_t rc_rshift_sfx = 2*(SL-1); // shift to put letter in first position of suffix
+
+		/// KMER BIN FILLING LOOP. Read a fasta record, decompose in to k-mers, and add min(kmer, RC of kmer) to the KGrid.
+		n_prefices = 0;
+		#pragma omp parallel for schedule(dynamic) reduction(+:n_prefices)
 		for (uint32_t i = 0; i < ns; ++i) {
-			uint64_t x = Offsets[i];
-			uint64_t y = x; while (Raw[y] && Raw[y] != '\n') ++y;
-			int slideSafe = 0; uint32_t num; kmer_t kmer;
-			while (x + K <= y) {
-				int err=0, a = 0;
-				if (slideSafe) {
-					uint32_t c = CONV[31 & Raw[x+PL-1]];
-					if (c==AMBIG) {x+=PL; slideSafe=0; continue;}
-					//num = (num << pre_bshf_2 >> pre_bshf) | c;
-					num = ((num << 2) | c) & mask32;
-					kmer_t k = CONV[31 & Raw[x+K-1]];
-					if (k==AMBIG) {x+=K; slideSafe=0; continue;}
-					//kmer = (kmer << pst_bshf_2 >> pst_bshf) | k;
-					kmer = ((kmer << 2) | k) & maskK;
-				} else {
-					num = prefix_to_num(Raw+x,PL,&err,kpre_shf);
-					if (err) {x+= num+1; slideSafe=0; continue;}
-					kmer = dna_to_num(Raw+x+PL,SL,&err,kpst_shf);
-					if (err) {x+= kmer+1; slideSafe=0; continue;}
-					slideSafe = 1;
-				}
-				
-				while (a < comp && !CONV[31 & Raw[x+a-comp]]) ++a; // compression
-				if (a==comp) {
-					uint64_t pod_ix;
-					#pragma omp atomic capture
-					pod_ix = KIx[num]++;
+			// Offsets stores indices into the whole Raw file for where each sequence starts
+			char *seq = Raw + Offsets[i];
+			uint64_t y = 0; while (seq[y] && seq[y] != '\n') ++y; // y is the last position in the sequence (inclusive!)
+			int64_t lastAmbig = -1, tallyMade = 0, tallyPassed = 0;
+			uint32_t pfx = 0; kmer_t sfx = 0; // stores binarized prefix and suffix of the k-mer
+			uint32_t pfxRC = 0; kmer_t sfxRC = 0; // stores binarized prefix and suffix of the reverse complement of the k-mer
+			for (int64_t j = 0; j < y; ++j) { // Start at the prefix length, and go to the end of the sequence
+				uint32_t c = 0;  // c is the character we're looking at
+				if (j >= SL) c = CONV[31 & seq[j-SL]]; // Get binary conversion of the letter, lag by suffix len (we don't want to overlap it)
+					if (c==AMBIG) lastAmbig = j-SL, c = 0; // Mark last ambiguous position
+				pfx = pfx << 2 | c; // Shift the prefix left by 2 bits and tack the new character onto the end
+				pfx = pfx << shifty >> shifty; // remove the leading bits that are not part of the prefix
 					
-					KGrid[pod_ix] = (KPod){kmer,i};
-				}
-				++x;
+				// Now get the first character of the suffix, which is the current character
+				kmer_t k = CONV[31 & seq[j]]; // the read head is always aligned with the end of the k-mer (also the end of the suffix)
+				if (k==AMBIG) lastAmbig = lastAmbig > j ? lastAmbig : j, k = 0; // Mark last ambiguous position
+				sfx = sfx << 2 | k; // Shift the suffix left by 2 bits and tack the new character onto the end
+				sfx = sfx << shifty2 >> shifty2; // remove the leading bits that are not part of the suffix
+				
+				// Now get the next character for the reverse complement's prefix and suffix
+				c = RCONV[31 & seq[j]]; // the read head is always aligned with the end of the k-mer (also the end of the suffix)
+				c = c==AMBIG ? 0 : c; // Ambiguity already marked, so just cast to 0 ('A') to allow it to keep going
+				pfxRC = pfxRC >> 2 | (uint32_t)c << rc_rshift_pfx; // Shift the prefix right by 2 bits and tack the new character onto the beginning
+				if (j >= PL) k = RCONV[31 & seq[j-PL]]; // the read head is always aligned with the end of the k-mer (also the end of the suffix)
+				k = k==AMBIG ? 0 : k; // Ambiguity already marked, so just cast to 0 ('A') to allow it to keep going
+				sfxRC = sfxRC >> 2 | (kmer_t)k << rc_rshift_sfx; // Shift the suffix right by 2 bits and tack the new character onto the beginning
+
+				// DEBUG: Print the prefix and suffix
+				char pfxstr[PL+1]; pfxstr[PL] = 0;
+				char pfxstrRC[PL+1]; pfxstrRC[PL] = 0;
+				char sfxstr[SL+1]; sfxstr[SL] = 0;
+				char sfxstrRC[SL+1]; sfxstrRC[SL] = 0;
+				//for (int i = PL-1; i >= 0; --i) pfxstr[i] = "ACGT"[3 & (pfx >> 2*i)];
+				/* num_to_dna(pfx,PL,pfxstr);
+				num_to_dna(pfxRC,PL,pfxstrRC);
+				num_to_dna(sfx,SL,sfxstr);
+				num_to_dna(sfxRC,SL,sfxstrRC);
+				char hasAmbig = j < lastAmbig + (int64_t)K ? 'Y' : 'N';
+				printf("Ref %u, pos %d (%c). pfx sfx ; pfxRC sfxRC: %s %s ; %s %s\n",i,(int)j-K+1,hasAmbig,pfxstr,sfxstr,pfxstrRC,sfxstrRC); */
+
+				// If the read head is past the last ambiguous position, our current k-mer is complete, so look it up
+				if (j >= lastAmbig + (int64_t)K) { 
+					// Determine which pairs (pfx,sfx or pfxRC,sfxRC) to keep by comparing the two. We simply keep the smaller of the two.
+					uint32_t final_pfx = pfx; kmer_t final_sfx = sfx;
+					if (pfxRC < pfx || pfxRC == pfx && sfxRC < sfx) final_pfx = pfxRC, final_sfx = sfxRC;
+					// Now we have the final k-mer, so we can look it up in the KGrid
+					// our choice of filter is simple: Are the characters before the prefix A then not A (or level 2: C)? If so, keep.
+					if (!comp || j > K && FltF1[CONV[31 & seq[j-K]]] && FltF2[CONV[31 & seq[j-K-1]]] || 
+								j < y - 1 && FltR1[CONV[31 & seq[j+1]]] && FltR2[CONV[31 & seq[j+2]]] ) { 
+						if (comp) ++tallyPassed;
+						++n_prefices;
+						uint64_t pod_ix;
+						#pragma omp atomic capture
+						pod_ix = KIx[final_pfx]++;
+						
+						KGrid[pod_ix] = (KPod){final_sfx,i};
+					} 
+					++tallyMade;
+					
+				} 
+				Lengths[i] = tallyMade + K - 1; 
 			}
+			//if (comp) printf("Query %d: %d kmers made, %d passed filter\n",i,tallyMade,tallyPassed);
 		}
-		printf("Time: %f\n",omp_get_wtime()-wtime);
+
+
+		printf("Time to catalogue all %lu prefices: %f\n",n_prefices, omp_get_wtime()-wtime);
 		uint64_t numK = 0;
 		#pragma omp parallel for schedule(dynamic,1024) reduction(+:numK)
 		for (uint64_t i = 0; i < nbins; ++i) {
@@ -389,45 +461,61 @@ int main(int argc, char *argv[]) {
 			KPod *start = KGrid + Nibs[i];
 			size_t num = KIx[i]-Nibs[i];
 			qsort(start,num,sizeof(*start),kpackcmp);
+			//char pfxstr[PL+1]; pfxstr[PL] = 0;
+			//num_to_dna(i,PL,pfxstr); printf("Prefix %lu (%s): %lu kmers\n",i,pfxstr, num);
 			numK += num;
 		}
 		printf("There were %lu k-mers.\n",numK);
 		
 		printf("Some stats on distributions!\n");
-		uint64_t n_dupe = 0, n_multi = 0;
-		#pragma omp parallel for schedule(dynamic,1024) reduction(+:n_dupe,n_multi)
+		// New: check for duplicates and multi-mapping k-mers...
+		// Now including a step to reverse complement the k-mers in duplicate assessment
+		uint64_t n_dupe = 0, n_multi = 0, n_total = 0;
+		#pragma omp parallel for schedule(dynamic,1024) reduction(+:n_dupe,n_multi,n_total)
 		for (uint64_t i = 0; i < nbins; ++i) {
 			if (KIx[i] <= Nibs[i]) continue;
-			for (uint64_t j = Nibs[i]+1; j < KIx[i]; ++j) 
+			n_total += KIx[i]-Nibs[i];
+			// For later, we will convert this nib (which is a k-mer prefix!) into part of a k-mer which we can reverse complement later
+			//char kmer_str[64] = {0}, rc_str[64] = {0};
+			//num_to_dna(i,PL,kmer_str); // precompute the prefix shared by all k-mers in this bin
+			//for (int j = 0; j < PL; ++j) rc_str[j+SL] = RCONS[31 & kmer_str[PL-1-j]]; // reverse complement the prefix
+			//printf("* Prefix: %s; range to search for dupes: %lu <- %lu\n",kmer_str, Nibs[i]+1, KIx[i]);
+
+			// First, check for exact duplicates
+			for (uint64_t j = Nibs[i]+1; j < KIx[i]; ++j) {
 				if (KGrid[j].sfx==KGrid[j-1].sfx) {
 					++n_multi;
 					if (KGrid[j].rix==KGrid[j-1].rix) ++n_dupe;
 				}
+			}
 		}
-		printf("Exact duplicates: %lu; across refs: %lu\n",n_dupe,n_multi);
+		printf("Exact duplicates: %lu; across refs: %lu (%lu total)\n",n_dupe,n_multi, n_total);
 		
 		// Now write the results
-		/* File structure:
-		   1. Version byte and rix_t size [1]
-		   2. Size of prefix [1]
+		/* File structure V3:
+		   1. Version byte [1] | compression level// no more rix_t size
+		   2. Size of prefix
 		   3. Size of suffix [1]
 		   4. Size of kmer_t [1]
 		   5. Num refs [4]
 		   6. Num kmers [8]
 		   7. All prefix indices [1 << (2 * #2) x 8]
 		   8. All kmer data [(#2 + #4) * #6]
-		   9. Size of string data [8]
-		   10. All strings [#9]
+		   9. Number of adamantine kmer targets [8] // new
+		   10. All adamantine kmer targets [(#2 + #4) * #9] // new
+		   11. All reference lengths [#5 x 4] // new (v0.96)
+		   12. Size of string data [8]
+		   13. All strings [#9]
 		   
-		   11. Number of Ix1 in map [4] [0 means skip rest of file]
-		   12. String size for Ix1 [8]
-		   13. Ix1 strings dump [#12]
-		   14. Number of Ix2 in map [4] [can be 0/skipped if no h2 map]
-		   15. String size of Ix2 [8]
-		   16. Ix2 strings dump [#15] 
-		   //17. hpair_t dump [num ref by 8]
-		   17. HPairs[0] dump [num ref by 4]
-		   18. HPairs[1] dump [num ref by 4]
+		   14. Number of Ix1 in map [4] [0 means skip rest of file]
+		   15. String size for Ix1 [8]
+		   16. Ix1 strings dump [#12]
+		   17. Number of Ix2 in map [4] [can be 0/skipped if no h2 map]
+		   18. String size of Ix2 [8]
+		   19. Ix2 strings dump [#15] 
+		   //20. hpair_t dump [num ref by 8] // old
+		   21. HPairs[0] dump [num ref by 4]
+		   22. HPairs[1] dump [num ref by 4]
 		*/
 		
 		uint64_t fileSz = 0, stringSz = 0;
@@ -437,61 +525,72 @@ int main(int argc, char *argv[]) {
 			uint64_t y = x; while (Raw[y] != '>') --y;
 			stringSz += x-y - 1; // -1 for the '>' we're on, -1 '\n', but +1 '\0'
 		}
-		fileSz = 24 + sizeof(*Nibs)*(nbins+1) + sizeof(*KGrid)*numK + stringSz;
+		fileSz = 24 + sizeof(*Nibs)*(nbins+1) + sizeof(*KGrid)*numK + sizeof(*Lengths)*ns + stringSz;
 		printf("Initial file size = %lu\n",fileSz+4);
 		
 		FILE *db = fopen(dbPath,"wb");
 		if (!db) {puts("I/O error: invalid db output file"); exit(1);}
 		setvbuf(db, 0, _IOFBF, 1<<22);
 		wtime = omp_get_wtime();
-		fputc((VNO << 4) | sizeof(rix_t),db); 
-		fputc(PL,db); fputc(SL,db); fputc(sizeof(kmer_t),db);
+		//uint8_t vno_derived = VNO + (comp); // comp can go up to 3, so the max value of vno_derived is VNO (currently 2) + 3 = 5.
+		fputc((VNO << 4) | comp,db);  // 1: to extract the version number, do (vno_derived >> 4) & 0xF. to extract the compression level, do vno_derived & 0xF.
+		fputc(PL,db); // 2
+		fputc(SL,db); // 3
+		fputc(sizeof(kmer_t),db); // 4
 		size_t wrote = 4;
-		wrote += fwrite(&ns,sizeof(ns),1,db); 
-		wrote += fwrite(&numK,sizeof(numK),1,db);
+		wrote += fwrite(&ns,sizeof(ns),1,db); // 5
+		wrote += fwrite(&numK,sizeof(numK),1,db); // 6
 		uint64_t tally = 0;
-		for (uint64_t i = 0; i < nbins+1; ++i) {
+		for (uint64_t i = 0; i < nbins+1; ++i) { // 7
 			wrote += fwrite(&tally,sizeof(*Nibs),1,db);
 			tally += KIx[i]-Nibs[i];
 		}
 		printf("First write: %f s.\n",omp_get_wtime()-wtime);
 		wtime = omp_get_wtime();
-		for (uint64_t i = 0; i < nbins; ++i) {
+		for (uint64_t i = 0; i < nbins; ++i) { // 8
 			if (KIx[i] <= Nibs[i]) continue;
 			uint64_t num = KIx[i]-Nibs[i];
 			fwrite(KGrid + Nibs[i], sizeof(*KGrid), num,db);
 		}
 		printf("Second write: %f s.\n",omp_get_wtime()-wtime);
 		
-		wtime = omp_get_wtime();
-		fwrite(&stringSz,sizeof(stringSz),1,db);
-		for (uint32_t i = 0; i < ns; ++i) {
-			uint64_t x = Offsets[i];
-			uint64_t y = x; while (Raw[y] != '>') --y;
-			fwrite(Raw+y+1,1,x-y-2,db);fputc(0,db);
-		}
-		printf("Third write: %f s.\n",omp_get_wtime()-wtime);
+		// To determine the number of adamantine kmer targets, we need to go through the k-mers and count them
 		
-		// TODO: also write statistics; for each genome, total K etc
-		FILE *out = fopen(logPath,"wb");
-		if (!out) printf("No log file specified; won't produce tally\n");
-		else {
+		
+		// Compute (and potentially write) genome statistics, including adamantine k-mer targets
+		uint64_t *Adamant_Prefix = 0; kmer_t *Adamant_Suffix = 0;
+		uint64_t n_weak = 0;
+		FILE *out = fopen(logPath,"wb"); // will be 0 if no log file specified
+		if (out || adamantium) {
+			if (adamantium) {
+				Adamant_Prefix = huge_calloc((nbins+2)*sizeof(*Adamant_Prefix));
+				Adamant_Prefix += 1; // Shift the pointer to the right by 1 so that we can use the 0th index as a sentinel
+				// Prepopulate the two amantine k-mer bin prefix arrays to exactly mirror Nibs (and grow like KIx)
+				for (uint64_t i = 0; i < nbins+1; ++i) Adamant_Prefix[i] = Nibs[i]; 
+				Adamant_Suffix = malloc(numK*sizeof(*Adamant_Suffix)); // worst case is all k-mers are adamantine
+			}
 			uint32_t *TotK_m = huge_calloc((uint64_t)ns*sizeof(*TotK_m));
 			uint32_t *TotUniq_m = huge_calloc((uint64_t)ns*sizeof(*TotUniq_m));
+			uint32_t *TotUniq_dd_m = huge_calloc((uint64_t)ns*sizeof(*TotUniq_dd_m));
+			uint32_t *TotWeak_m = huge_calloc((uint64_t)ns*sizeof(*TotWeak_m));
 			#pragma omp parallel
 			{
 				int tid = omp_get_thread_num();
-				uint32_t *TotK = TotK_m, *TotUniq = TotUniq_m;
+				uint32_t *TotK = TotK_m, *TotUniq = TotUniq_m, *TotWeak = TotWeak_m,
+					*TotUniq_dd = TotUniq_dd_m;
+				char kmer_str[128] = {0}, weakmer_str[128] = {0}; //, rc_str[128] = {0};
 				
 				if (tid) 
+					TotWeak = huge_calloc((uint64_t)ns*sizeof(*TotWeak)),
 					TotK = huge_calloc((uint64_t)ns*sizeof(*TotK)),
-					TotUniq = huge_calloc((uint64_t)ns*sizeof(*TotUniq));
+					TotUniq = huge_calloc((uint64_t)ns*sizeof(*TotUniq)),
+					TotUniq_dd = huge_calloc((uint64_t)ns*sizeof(*TotUniq_dd));
 				
-				#pragma omp for schedule(dynamic,1024)
+				#pragma omp for schedule(dynamic,1024) reduction(+:n_weak)
 				for (uint64_t i = 0; i < nbins; ++i) {
 					if (KIx[i] <= Nibs[i]) continue; // empty
 					uint32_t ambig = 0;
-					uint64_t end = Nibs[i]+(KIx[i]-Nibs[i]), nd;
+					uint64_t end = KIx[i], nd;
 					kmer_t thisK = KGrid[Nibs[i]].sfx+1;
 					
 					for (uint64_t j = Nibs[i]; j < end; j += nd) {
@@ -502,34 +601,188 @@ int main(int argc, char *argv[]) {
 							thisK = KGrid[j].sfx; 
 							ambig = 0; 
 							for (uint64_t k = j+1; k < end && KGrid[k].sfx == thisK; ++k)
-								ambig |= KGrid[k].rix ^ rix;
+								ambig |= KGrid[k].rix ^ rix; 
 						}
-						
+
 						// Find number of in-ref copies
 						nd = 1;
 						for (uint64_t k = j+1; k < end && 
 						KGrid[k].sfx == thisK && KGrid[k].rix == rix; ++k) ++nd;
 						
 						// Increment the appropriate variables
-						if (!ambig) TotUniq[rix] += nd;
+						if (!ambig) TotUniq[rix] += nd, ++TotUniq_dd[rix];
+						if (!ambig && adamantium) {
+							//printf("Kmer %s found in ref %u %u times\n",kmer_str,rix,nd);
+							// Let's stress test the uniqueness of these supposedly "unambiguous" k-mers. We do this
+							// by introducing every possible character mutation to the k-mer and seeing if it's still unique.
+							// We can start by going through every position in the prefix and flipping the letter to each of the other 3.
+							// Let's start with just the prefix, keeping the suffix constant. Let's directly modify prefix_mut.
+							// Let's ignore the suffix entirely for now. Once we do all its mutations, we move onto suffix.
+							int isWeak = 0; // is this k-mer weakly unique? (i.e. unique in this ref, but not strongly unique)
+							uint32_t prefix_mut = i; kmer_t suffix_mut = thisK;
+							for (int p = 0; p < PL; ++p) {
+								//uint32_t prefix_mut = i; // the prefix of the k-mer, reset to the bin index
+								for (uint32_t c = 0; c < 4; ++c) {
+									prefix_mut = i; // the prefix of the k-mer, reset to the bin index
+									if (c == (prefix_mut >> (2*(PL-1-p)) & 3)) continue; 
+									prefix_mut = prefix_mut & ~(3 << (2*(PL-1-p))) | c << (2*(PL-1-p)); // set the p-th letter to c
+									// Now that the prefix has mutated, we can look up the k-mer in the KGrid
+									uint64_t ix_mut = Nibs[prefix_mut]; // the index of the first k-mer with this prefix
+									uint64_t end_mut = KIx[prefix_mut]; // the index of the first k-mer with a different prefix
+
+									// for debugging and printing, show old and new prefix
+									/* num_to_dna(i,PL,kmer_str);
+									num_to_dna(prefix_mut,PL,weakmer_str);
+									num_to_dna(thisK,SL,weakmer_str+PL);
+									kmer_str[PL] = 0; //weakmer_str[PL] = 0;
+									printf("Prefix %s mutated to %s (range of matches %lu; %s)\n",kmer_str,weakmer_str,end_mut-ix_mut, weakmer_str);
+ 									*/
+									// binary search for the current (original) suffix in the range of k-mers with the mutated prefix
+									//static inline uint64_t LBS_k(KPod *KP, uint64_t N, kmer_t k)
+									if (end_mut <= ix_mut) continue; // if there are no k-mers with this prefix, then it's unique
+									uint64_t ix = LBS_k(KGrid+ix_mut, end_mut-ix_mut, thisK);
+
+									if (ix != (uint64_t)-1) {
+										//printf("--> Match found at %lu\n",ix);
+										//for (uint64_t k = j+1; k < end && 
+										//	KGrid[k].sfx == thisK && KGrid[k].rix == rix; ++k) ++nd;
+										int difRef = 0; 
+										for (uint64_t k = ix_mut + ix; k < end_mut && KGrid[k].sfx == thisK; ++k) 
+											if (KGrid[k].rix != rix) { difRef = 1; break; }
+										if (difRef) 
+										{
+											//num_to_dna(prefix_mut,PL,weakmer_str); num_to_dna(thisK,SL,weakmer_str+PL);
+											isWeak = 1; break;
+										}
+									}
+								}
+								if (isWeak) break;
+							}
+							if (!isWeak) { // check the suffix now. We can directly modify suffix_mut. (keep old prefix, i)
+								for (int p = 0; p < SL; ++p) {
+									for (kmer_t c = 0; c < 4; ++c) {
+										suffix_mut = thisK; // the original suffix of the k-mer
+										if (c == (suffix_mut >> (2*(SL-1-p)) & 3)) continue; 
+										suffix_mut = suffix_mut & ~(3 << (2*(SL-1-p))) | (kmer_t)c << (2*(SL-1-p)); // set the p-th letter to c
+										// Now that the suffix has mutated, we can look up the k-mer in the KGrid
+										uint64_t ix_mut = Nibs[i]; // the index of the first k-mer with this prefix
+										uint64_t end_mut = KIx[i]; // the index of the first k-mer with a different prefix
+
+										// for debugging and printing, show old and new suffix
+										/* num_to_dna(thisK,SL,kmer_str+PL);
+										num_to_dna(suffix_mut,SL,weakmer_str+PL);
+										printf("Suffix %s mutated to %s (range of matches %lu; %s)\n",kmer_str+PL,weakmer_str+PL,end_mut-ix_mut,weakmer_str);
+ 										*/
+										// binary search for the current (original) suffix in the range of k-mers with the mutated prefix
+										//if (ix_mut == end_mut) continue; // if there are no k-mers with this prefix, then it's unique
+										uint64_t ix = LBS_k(KGrid+ix_mut, end_mut-ix_mut, suffix_mut);
+										// Test: see whether any reference found along the path is actually different from rix
+										
+										if (ix != (uint64_t)-1) { // if we found the k-mer (in a different ref?), then it's not unique
+											//printf("--> Match found at %lu\n",ix);
+											int difRef = 0; 
+											for (uint64_t k = ix_mut+ix; k < end_mut && KGrid[k].sfx == suffix_mut; ++k) 
+												if (KGrid[k].rix != rix) { difRef = 1; break; }
+											if (difRef) 
+											{
+												//num_to_dna(i,PL,weakmer_str); num_to_dna(suffix_mut,SL,weakmer_str+PL);
+												isWeak = 1; break;
+											}
+										}
+									}
+									if (isWeak) break;
+								}
+							}	
+							//num_to_dna(i,PL,kmer_str); // the prefix shared by all k-mers in this bin
+							//num_to_dna(thisK,SL,kmer_str+PL);  // append the suffix to the prefix
+							//if (!isWeak) printf("%s\tSTRONG\t%u\n",kmer_str,rix);
+							//else printf("%s\tWEAK\t%u\t%s\n",kmer_str,rix,weakmer_str);
+							
+							if (isWeak) {
+								++TotWeak[rix];
+								uint64_t adix;
+								#pragma omp atomic capture
+								adix = Adamant_Prefix[i]++;
+								Adamant_Suffix[adix] = thisK;
+								++n_weak; 
+							}
+						}
 						TotK[rix] += nd;
 					}
 				}
 				#pragma omp critical
 				if (tid) for (uint32_t i = 0; i < ns; ++i) 
-						TotK_m[i] += TotK[i], TotUniq_m[i] += TotUniq[i];
+						TotK_m[i] += TotK[i], TotUniq_m[i] += TotUniq[i], TotUniq_dd_m[i] += TotUniq_dd[i], TotWeak_m[i] += TotWeak[i];
 			}
-			fprintf(out,"Reference\tTotalKmers\tUniqKmers\n");
-			for (uint64_t i = 0; i < ns; ++i) {
-				uint64_t x = Offsets[i];
-				uint64_t y = x; while (Raw[y] != '>') --y;
-				fwrite(Raw+y+1,1,x-y-2,out); // write the ref name
-				fprintf(out,"\t%u\t%u\n",TotK_m[i],TotUniq_m[i]);
+			if (adamantium) {
+				printf("There were %lu pre-adamantine k-mers.\n",n_weak);
+				// Now go through and sort the suffixes for each prefix in Adamant_Prefix
+				uint64_t unique_adamant = 0; 
+				#pragma omp parallel for schedule(dynamic,1024) reduction(+:unique_adamant)
+				for (uint64_t i = 0; i < nbins; ++i) {
+					if (Adamant_Prefix[i] == Nibs[i]) continue; // empty bin
+					uint64_t num = Adamant_Prefix[i]-Nibs[i];
+					qsort(Adamant_Suffix+Nibs[i],num,sizeof(*Adamant_Suffix),kcmp);
+
+					// Now we need to remove duplicates from the suffixes. We can do this by going through the sorted suffixes and
+					// keeping track of the last suffix we saw. If the current suffix is the same as the last one, then we can
+					// remove it. Otherwise, we keep it and update the last suffix.
+					uint64_t last = Nibs[i];
+					for (uint64_t j = Nibs[i]+1; j < Adamant_Prefix[i]; ++j) {
+						if (Adamant_Suffix[j] == Adamant_Suffix[last]) continue;
+						Adamant_Suffix[++last] = Adamant_Suffix[j];
+					}
+					unique_adamant += last - Nibs[i] + 1; // update the total number of unique suffixes
+					Adamant_Prefix[i] = last+1; // update the prefix to point to the end of the unique suffixes
+				}
+				printf("There were %lu unique adamantine k-mers.\n",unique_adamant);
+
+				// Now output them to the file using the new sorted deduplicated suffixes
+				fwrite(&unique_adamant,sizeof(unique_adamant),1,db); // 9
+				uint64_t counter = 0;
+				for (uint64_t i = 0; i < nbins; ++i) { // 10
+					uint64_t num = Adamant_Prefix[i]-Nibs[i];
+					Adamant_Prefix[i] = Adamant_Prefix[i-1] + num; 
+					if (num == 0) continue;
+					counter += fwrite(Adamant_Suffix+Nibs[i],sizeof(*Adamant_Suffix),num,db); // 10
+					// Rebuild from left to right as the starting index of the current bin
+					
+				}
+				printf("Wrote %lu adamantine k-mers of size %lu\n",counter, sizeof(*Adamant_Suffix));
+				Adamant_Prefix[nbins] = Adamant_Prefix[nbins-1]; // the last bin is the same as the second-to-last bin
+				Adamant_Prefix -= 1; // Shift the pointer back to the left by 1
+				fwrite(Adamant_Prefix,sizeof(*Adamant_Prefix),nbins+1,db); // 10 (part 2)
+			} 
+			if (out) {
+				if (adamantium) fprintf(out,"Reference\tUsableLen\tTotalKmers\tUniqKmers\tUniqKmers_SC\tWeakKmers\n");
+				else
+				fprintf(out,"Reference\tUsableLen\tTotalKmers\tUniqKmers\tUniqKmers_SC\n");
+				for (uint64_t i = 0; i < ns; ++i) {
+					uint64_t x = Offsets[i];
+					uint64_t y = x; while (Raw[y] != '>') --y;
+					fwrite(Raw+y+1,1,x-y-2,out); // write the ref name
+					if (adamantium) fprintf(out,"\t%u\t%u\t%u\t%u\t%u\n",Lengths[i], TotK_m[i], TotUniq_m[i], TotUniq_dd_m[i], TotWeak_m[i]);
+					else fprintf(out,"\t%u\t%u\t%u\t%u\n",Lengths[i], TotK_m[i], TotUniq_m[i], TotUniq_dd_m[i]);
+				}
 			}
+
 		}
+		else if (!out) printf("No log file specified and no adamantium; won't produce tally\n");
+		if (!adamantium) fwrite(&n_weak,sizeof(n_weak),1,db); // 9
+
+		// Resume writing with #11
+		wtime = omp_get_wtime();
+		fwrite(Lengths,sizeof(*Lengths),ns,db); // 11 // new
+		fwrite(&stringSz,sizeof(stringSz),1,db); // 12 
+		for (uint32_t i = 0; i < ns; ++i) { // 13
+			uint64_t x = Offsets[i];
+			uint64_t y = x; while (Raw[y] != '>') --y;
+			fwrite(Raw+y+1,1,x-y-2,db);fputc(0,db);
+		}
+		printf("Third write: %f s.\n",omp_get_wtime()-wtime);
 		
 		// Handle the H1/H2 mappings
-		if (!ixPath) { // If no ixMap was provided, finish up.
+		if (!ixPath) { // 14 (If no ixMap was provided, finish up.)
 			uint32_t zeroRef = 0;
 			fwrite(&zeroRef,sizeof(zeroRef),1,db);
 			exit(0); 
@@ -547,6 +800,7 @@ int main(int argc, char *argv[]) {
 		
 		//gzFile map = gzopen(ixPath,"rb");
 		//int mapFsz = gzread(map,wholeMap,(uint64_t)1 << 38);
+		// Resume writing by calculating and writing at #14
 		FILE *map = fopen(ixPath,"rb");
 		if (!map) {fprintf(stderr,"Can't open map: %s\n",ixPath); exit(2);}
 		
@@ -671,17 +925,16 @@ int main(int argc, char *argv[]) {
 		// 2. The hpair_t dump -- update: now the two separate H arrays
 		
 		/*
-		   11. Number of Ix1 in map [4] [0 means skip rest of file]
-		   12. String size for Ix1 [8]
-		   13. Ix1 strings dump [#12]
-		   14. Number of Ix2 in map [4] [can be 0/skipped if no h2 map]
-		   15. String size of Ix2 [8]
-		   16. Ix2 strings dump [#15] 
-		   //17. hpair_t dump [num ref by 8]
-		   17. HPairs[0] dump [num ref by 4]
-		   18. HPairs[1] dump [num ref by 4]
+		   12. Number of Ix1 in map [4] [0 means skip rest of file]
+		   13. String size for Ix1 [8]
+		   14. Ix1 strings dump [#12]
+		   15. Number of Ix2 in map [4] [can be 0/skipped if no h2 map]
+		   16. String size of Ix2 [8]
+		   17. Ix2 strings dump [#15] 
+		   //18. hpair_t dump [num ref by 8] // old
+		   18. HPairs[0] dump [num ref by 4]
+		   19. HPairs[1] dump [num ref by 4]
 		*/
-		
 		
 		stringSz = 0;
 		#pragma omp parallel for reduction(+:stringSz)
@@ -741,15 +994,23 @@ int main(int argc, char *argv[]) {
 		printf("Copied into local memory [%f]\n",omp_get_wtime()-wtime);
 		wtime = omp_get_wtime();
 	}
-	uint32_t ver = Raw[0] >> 4, rixSz = (uint8_t)Raw[0] & 15,
+	uint32_t ver = Raw[0] >> 4, rixSz = sizeof(rix_t), compdb = (uint8_t)Raw[0] & 15,
 		PL = Raw[1], SL = Raw[2], ktSz = Raw[3];
 	uint32_t numRef = *(uint32_t *)(Raw+4);
 	uint64_t numK = *(uint64_t *)(Raw+8);
-	printf("DBv: %d, rixSz = %d, PL = %d, SL = %d, ktSz = %d\n",
-		ver, rixSz, PL, SL, ktSz);
+	// Raw[0] was stored as: fputc((VNO << 4) | comp,db); // 1 byte
+	if (ver != 5) {printf("ERROR: bad DB version %d (CrossTree < v2.0)\n",ver); exit(2);}
+	if (comp < -1 || comp > 2) {printf("WARNING: bad compression level %d (range is 0-2)\n",comp); comp = -1;}
+	if (comp != -1 && comp != compdb) 
+		printf("WARNING: forcing query compression to %d instead of DB's native %d\n",comp,compdb);
+	comp = comp == -1 ? compdb : comp; // -1 = auto, 0 = no, 1+ = yes
+	if (comp == 2) FltF2 = FLTF2_2, FltR2 = FLTR2_2; // use stronger filters for compressive filtering
+
+	printf("DBv: %d, DBcomp = %d, rixSz = %d, PL = %d, SL = %d, ktSz = %d\n", 
+		VNO, compdb, rixSz, PL, SL, ktSz);
 	printf("Number of refs = %u, kmers = %lu\n",numRef, numK);
 	if (sizeof(kmer_t)!=ktSz || sizeof(rix_t) != rixSz) 
-		{puts("ERROR: wrong K or R size(s) for this DB"); exit(2);}
+		{puts("ERROR: wrong K or R size(s) for this DB/xtree build"); exit(2);}
 	place = 16; //#1-6
 	
 	// Initialize stats
@@ -767,9 +1028,31 @@ int main(int argc, char *argv[]) {
 	KPod *KGrid = (KPod *)(Raw + place);
 	printf("Size of kpod = %ld\n",sizeof(*KGrid));
 	place += numK*sizeof(*KGrid); //#8
+
+	// Read the adamantine prefix/suffix arrays (if present)
+	uint64_t *Adamant_Prefix = 0; // Only stored one
+	kmer_t *Adamant_Suffix = 0;
+	uint64_t n_adamant = *(uint64_t *)(Raw + place);
+	place += sizeof(n_adamant); //#9
+	//printf("Adamant DB size = %lu (current position = %lu)\n",n_adamant,place); fflush(stdout);
+	if (n_adamant) { // #10 Read adamantium DBs
+		// Read the prefix and suffix arrays
+		Adamant_Suffix = (kmer_t *)(Raw + place);
+		place += n_adamant*sizeof(*Adamant_Suffix); //#10 (part 1)
+		Adamant_Prefix = (uint64_t *)(Raw + place);
+		place += (nbins+1)*sizeof(*Adamant_Prefix); //#10 (part 2)
+		printf("Adamantly read adamant DB of %u adamantine elements of adamantium\n",n_adamant); 
+		if (n_adamant > 0) printf("And it was super hard to do so...\n");
+		else if (adamantium) puts("WARNING: Empty Adamantium DB; disabling Adamantium Engine"), adamantium = 0;
+	}
+
+	// Read the ref sizes
+	uint32_t *RefSizes = (uint32_t *)(Raw + place);
+	place += numRef*sizeof(*RefSizes); //#11
 	
 	// Read the ref names
 	uint64_t stringSz = *(uint64_t *)(Raw + place);
+	//printf("String size = %lu\n",stringSz); fflush(stdout);
 	place += sizeof(stringSz); //#9
 	char *RefRaw = Raw + place;
 	place += stringSz; //#10
@@ -873,6 +1156,8 @@ int main(int argc, char *argv[]) {
 			}
 		}
 	}
+
+	printf("Database read in %f seconds\n",omp_get_wtime()-wtime);
 	
 	// debug: print everything out.
 	/* FILE *debug = fopen("debug.txt","wb");
@@ -906,25 +1191,14 @@ int main(int argc, char *argv[]) {
 	
 	exit(1); */
 	
-	#ifdef WSL
-	uint16_t wsum = 0;
-	for (uint64_t i = 0; i < numK; i+=4096/sizeof(*KGrid)) 
-		wsum += KGrid[i];
-	printf("4k Checksum: %d\n",wsum);
-	#endif
-	
 	uint32_t *QueryAligns = calloc(numK,sizeof(*QueryAligns)),
 		*FullQueryAligns = calloc((uint64_t)numRef,sizeof(*FullQueryAligns));
 	
 	
 	// Open those queries up and align 'em
 	KPod *EndPod = KGrid + Nibs[nbins] + 1;
-	uint64_t n_raw = 0, n_filt = 0, n_matchedF = 0, n_matchedR = 0;
-	uint32_t mask32 = ((uint64_t)1 << (2*PL)) - 1;
-	kmer_t maskK = ((kmer_t)1 << (2*SL)) - 1;
-	if (SL==sizeof(kmer_t)*4) maskK = -1;
+	uint64_t n_raw = 0, n_filt = 0, n_matched = 0;
 	
-	uint32_t preposit = PL*2-2, pstposit = SL*2-2;
 	wtime = omp_get_wtime();
 	printf("\n* Beginning alignment...\n");
 	
@@ -942,7 +1216,7 @@ int main(int argc, char *argv[]) {
 	
 	// Make a bucket for temporary LCA & ref votes, per query
 	uint64_t maxQsz = 1 << 27; //27; // arbitrary? Set a limit?
-	uint64_t masterBnSz = (uint64_t)1 << 32;
+	uint64_t masterBnSz = (uint64_t)1 << 31;
 	uint64_t masterLstSz = (uint64_t)1 << 31;
 
 	typedef struct {uint32_t p; uint64_t s;} SBin_t;
@@ -997,8 +1271,12 @@ int main(int argc, char *argv[]) {
 		if (!outq) {puts("ERROR: can't open per-q output file!"); exit(2);}
 	}
 	
+	uint32_t shifty = 32 - 2*PL; // shift to zero out extra letters in the prefix left over due to the type being larger than the prefix
+	kmer_t shifty2 = sizeof(kmer_t)*8 - 2*SL; // shift to zero out extra letters in the suffix left over due to the type being larger than the suffix
+	uint32_t rc_rshift_pfx = 2*(PL-1); // shift to put letter in first position of prefix
+	kmer_t rc_rshift_sfx = 2*(SL-1); // shift to put letter in first position of suffix
+	wtime = omp_get_wtime();
 	uint64_t nq, NQ = 0, nAligns = 0;
-
 	while (nq = get_queries(in,QBucket,HBucket,head,line,qChunk,INT32_MAX)) {
 		printf("Processed %lu queries\r",NQ); fflush(stdout);
 		if (nq + NQ >= INT32_MAX) {puts("Exceeded 2B queries; stopping"); nq = 0; break;}
@@ -1009,7 +1287,7 @@ int main(int argc, char *argv[]) {
 			int32_t *RBin = RBins[tid]; uint32_t *TBin = TBins[tid];
 			uint64_t *C_ix = C_ixs[tid], *C_sz = C_szs[tid],
 				**C_bin = C_bins[tid];
-			#pragma omp for schedule(dynamic,1) reduction(+:n_raw,n_filt,n_matchedF,n_matchedR)
+			#pragma omp for schedule(dynamic,1) reduction(+:n_raw,n_filt,n_matched)
 			for (uint64_t q = 0; q < nq; ++q) {
 				
 				uint8_t *Inf = QBucket[q];
@@ -1018,66 +1296,56 @@ int main(int argc, char *argv[]) {
 				if (y >= maxQsz) 
 					y = maxQsz-1,
 					printf("\nQuery %lu exceed maximum length of %lu; truncating\n",q+NQ,maxQsz-1);
-				int slideSafe = 0; 
-				uint32_t num, numR, c, tix = 0;
-				kmer_t kmer, kmerR, k;
-				while (x + K <= y) {
-					++n_raw;
-					uint64_t slen, seed;
-					if (slideSafe) {
-						c = CONV[31 & Inf[x+PL-1]];
-						if (c==AMBIG) {x+=PL; slideSafe=0; continue;}
-						num = ((num << 2) | c) & mask32;
-						k = CONV[31 & Inf[x+K-1]];
-						if (k==AMBIG) {x+=K; slideSafe=0; continue;}
-						kmer = ((kmer << 2) | k) & maskK;
-						
-					} else {
-						uint32_t err = 0;
-						num = prefix_to_num(Inf+x,PL,&err,kpre_shf);
-						if (err) {x+= num+1; slideSafe=0; continue;}
-						kmer = dna_to_num(Inf+x+PL,SL,&err,kpst_shf);
-						if (err) {x+= kmer+1; slideSafe=0; continue;}
-					}		
-					
-					slen = Nibs[num+1]-Nibs[num];
-					if (!slen) goto RC_S;
-					
-					seed = LBS_k(KGrid+Nibs[num],slen,kmer);
-					if (seed==(uint64_t)-1) goto RC_S;
-					//if (seed>=slen || seed+Nibs[num] >= numK) goto RC_S;
-					
-					//#pragma omp atomic
-					//QueryAligns[seed-KGrid]++; // TODO: write to temp first, then vote
-					//if (tix >= maxQsz-1) {puts("\nWARNING: memory load high\n"); exit(0);}
-					SBin[tix++] = (SBin_t){num,seed+Nibs[num]};
-					
-					++n_matchedF;
-					RC_S:
-					++n_filt;
-					
-					if (slideSafe) 
-						c = RCONV[31 & Inf[x+K-1]],
-						numR = (numR >> 2) | (c << preposit),
-						k = RCONV[31 & Inf[x+SL-1]],
-						kmerR = (kmerR >> 2) | (k << pstposit);
-					else numR = prefix_to_num_RC(Inf+x+SL,PL),
-						kmerR = dna_to_num_RC(Inf+x,SL);
-					slen = Nibs[numR+1]-Nibs[numR];
-					slideSafe = 1;
-					
-					if (!slen) {++x; continue;}
-					seed = LBS_k(KGrid+Nibs[numR],slen,kmerR);
-					if (seed==(uint64_t)-1) 
-					//if (seed>=slen || seed+Nibs[numR] >= numK)
-						{++x; continue;}
-					
-					//#pragma omp atomic
-					//QueryAligns[seed-KGrid]++; // TODO: write to temp first, then vote
-					SBin[tix++] = (SBin_t){numR,seed+Nibs[numR]};
-					
-					++n_matchedR; // bear in mind -- this is a raw k-mer tally.
-					++x;
+				
+				n_raw += y-K+1; // Increment the number of raw kmers by the number of kmers in the read
+				
+				char *seq = Inf; // Inf is the read
+				int64_t lastAmbig = -1;
+				uint32_t pfx = 0; kmer_t sfx = 0; // stores binarized prefix and suffix of the k-mer
+				uint32_t pfxRC = 0; kmer_t sfxRC = 0; // stores binarized prefix and suffix of the reverse complement of the k-mer
+				uint32_t tix = 0; // the index where the current k-mer is stored (from this read)
+				for (int64_t j = 0; j < y; ++j) { // Start at the prefix length, and go to the end of the sequence
+					uint64_t slen = 0, seed = -1;
+					uint32_t c = 0;  // c is the character we're looking at
+					if (j >= SL) c = CONV[31 & seq[j-SL]]; // Get binary conversion of the letter, lag by suffix len (we don't want to overlap it)
+						if (c==AMBIG) lastAmbig = j-SL, c = 0; // Mark last ambiguous position
+					pfx = pfx << 2 | c; // Shift the prefix left by 2 bits and tack the new character onto the end
+					pfx = pfx << shifty >> shifty; // remove the leading bits that are not part of the prefix
+
+					// Now get the first character of the suffix, which is the current character
+					kmer_t k = CONV[31 & seq[j]]; // the read head is always aligned with the end of the k-mer (also the end of the suffix)
+					if (k==AMBIG) lastAmbig = lastAmbig > j ? lastAmbig : j, k = 0; // Mark last ambiguous position
+					sfx = sfx << 2 | k; // Shift the suffix left by 2 bits and tack the new character onto the end
+					sfx = sfx << shifty2 >> shifty2; // remove the leading bits that are not part of the suffix
+
+					// Now get the next character for the reverse complement's prefix and suffix
+					c = RCONV[31 & seq[j]]; // the read head is always aligned with the end of the k-mer (also the end of the suffix)
+					c = c==AMBIG ? 0 : c; // Ambiguity already marked, so just cast to 0 ('A') to allow it to keep going
+					pfxRC = pfxRC >> 2 | (uint32_t)c << rc_rshift_pfx; // Shift the prefix right by 2 bits and tack the new character onto the beginning
+					if (j >= PL) k = RCONV[31 & seq[j-PL]]; // the read head is always aligned with the end of the k-mer (also the end of the suffix)
+					k = k==AMBIG ? 0 : k; // Ambiguity already marked, so just cast to 0 ('A') to allow it to keep going
+					sfxRC = sfxRC >> 2 | (kmer_t)k << rc_rshift_sfx; // Shift the suffix right by 2 bits and tack the new character onto the beginning
+					// If the read head is past the last ambiguous position, our current k-mer is complete, so look it up
+					if (j >= lastAmbig + (int64_t)K) { 
+						// process the kmer
+						++n_filt;
+						uint32_t final_pfx = pfx; kmer_t final_sfx = sfx;
+						if (pfxRC < pfx || pfxRC == pfx && sfxRC < sfx) final_pfx = pfxRC, final_sfx = sfxRC;
+
+						// Use the comp logic as in the previous code: CA_ or _TG
+						if (!comp || j > K && FltF1[CONV[31 & seq[j-K]]] && FltF2[CONV[31 & seq[j-K-1]]] || 
+								j < y - 1 && FltR1[CONV[31 & seq[j+1]]] && FltR2[CONV[31 & seq[j+2]]] ) { 
+							// We now only work with final_pfx and final_sfx (the canonical k-mer)
+							slen = Nibs[final_pfx+1]-Nibs[final_pfx];
+							if (!slen) continue; // If the k-mer is not in the prefix index, skip it
+							
+							seed = LBS_k(KGrid+Nibs[final_pfx],slen,final_sfx);
+							if (seed==(uint64_t)-1) continue; // If the k-mer is not in the suffix index, skip it
+	
+							SBin[tix++] = (SBin_t){final_pfx,seed+Nibs[final_pfx]};
+							++n_matched;
+						}
+					}
 				}
 				
 				// Resize the query tally bins if needed (rix, h1, h2)
@@ -1146,16 +1414,17 @@ int main(int argc, char *argv[]) {
 					continue; // no alignments, no worries
 				}
 				
-				if (covPath) for (uint32_t i = 0; i < tix; ++i) { // coverage
+				if (covPath) for (uint32_t i = 0; i < tix; ++i) { // coverage of k-mers
 					uint64_t ix = SBin[i].s;
 					uint64_t hardstop = Nibs[SBin[i].p+1];
 					kmer_t prev_sfx = KGrid[ix].sfx;
 					for (uint64_t j = ix; j < hardstop; ++j) {
 						if (KGrid[j].sfx != prev_sfx) break;
 						rix_t rix = KGrid[j].rix;
-						if (RBin[rix] == max) {
+						if (doForage || RBin[rix] == max || (doHalfForage && RBin[rix] >= 2*max/3 /* && RBin[rix] >= max2 */ )) { // if forage (meaning "grab all refs" for coverage table), or if this ref is tied for max
 							#pragma omp atomic
-							++QueryAligns[ix]; // TODO: change "ix" to "j" ?
+							++QueryAligns[doFullLCA? ix : j]; // TODO: change "ix" to "j" ? ix is the "first unique match" found by the left binary search. 
+							// we just made it toggleable, so we can have it both ways. To enable the old 'ix' behavior, specify --shallow-lca
 						}
 					}
 				}
@@ -1167,8 +1436,11 @@ int main(int argc, char *argv[]) {
 							++FullQueryAligns[rix]; // # all tied refs
 						}
 						if (doRedist) C_bin[0][C_ix[0]++] = rix;
+					} else if (covPath && (doForage || (doHalfForage && RBin[rix] >= 2*max/3 /* && RBin[rix] >= max2 */))) {
+						#pragma omp atomic
+						++FullQueryAligns[rix]; // # all refs
 					}
-					RBin[rix] = 0; // clear the bin
+					RBin[rix] = 0; // clear the bin so that reference counting doesn't double-count
 				}
 				if (doRedist) C_bin[0][C_ix[0]++] = -1;
 				
@@ -1313,8 +1585,8 @@ int main(int argc, char *argv[]) {
 		NQ += nq;
 	}
 	gzclose(in);
-	printf(" - Total k-mers: %lu, non-error: %lu, matchedF: %lu, matchedR: %lu\n",
-		n_raw, n_filt, n_matchedF, n_matchedR);
+	printf(" - Total k-mers: %lu, non-error: %lu, matched: %lu\n",
+		n_raw, n_filt, n_matched);
 	printf("--> Successfully aligned %lu/%lu queries [%f].\n",nAligns,NQ,omp_get_wtime()-wtime);
 	
 	
@@ -1537,19 +1809,36 @@ int main(int argc, char *argv[]) {
 	if (covPath) {
 		wtime = omp_get_wtime();
 		printf("\n* Printing coverage table...\n");
-		uint32_t *TotK_m = huge_calloc((uint64_t)numRef*sizeof(*TotK_m));
-		uint32_t *TotUniq_m = huge_calloc((uint64_t)numRef*sizeof(*TotUniq_m));
+		uint64_t *TotK_m = huge_calloc((uint64_t)numRef*sizeof(*TotK_m));
+		uint64_t *TotUniq_m = huge_calloc((uint64_t)numRef*sizeof(*TotUniq_m));
 		uint64_t *FoundK_m = huge_calloc((uint64_t)numRef*sizeof(*FoundK_m));
 		uint64_t *FoundUniq_m = huge_calloc((uint64_t)numRef*sizeof(*FoundUniq_m));
 		uint32_t *PropK_m = huge_calloc((uint64_t)numRef*sizeof(*PropK_m));
-		uint32_t *PropUniq_m = huge_calloc((uint64_t)numRef*sizeof(*PropK_m));
-		
+		uint32_t *PropUniq_m = huge_calloc((uint64_t)numRef*sizeof(*PropUniq_m));
+
+		//uint32_t *TotUniq_dedupe_m = huge_calloc((uint64_t)numRef*sizeof(*TotUniq_dedupe_m)); // new
+		uint32_t *FoundUniq_dedupe_m = huge_calloc((uint64_t)numRef*sizeof(*FoundUniq_dedupe_m)); // new
+		//uint32_t *PropUniq_dedupe_m = huge_calloc((uint64_t)numRef*sizeof(*PropUniq_dedupe_m)); // new
+		// define a TotUniq_adamantium_m, FoundUniq_adamantium_m, PropUniq_adamantium_m
+		uint32_t *TotUniq_adamantium_m = 0, *FoundUniq_adamantium_m = 0, *PropUniq_adamantium_m = 0;
+		if (adamantium) { // whether to do adamantium hardened k-space scouring
+			TotUniq_adamantium_m = huge_calloc((uint64_t)numRef*sizeof(*TotUniq_adamantium_m)); // new
+			FoundUniq_adamantium_m = huge_calloc((uint64_t)numRef*sizeof(*FoundUniq_adamantium_m)); // new
+			PropUniq_adamantium_m = huge_calloc((uint64_t)numRef*sizeof(*PropUniq_adamantium_m)); // new
+		}
 		#pragma omp parallel
 		{
 			int tid = omp_get_thread_num();
-			uint32_t *TotK = TotK_m, *TotUniq = TotUniq_m, 
-				*PropK=PropK_m, *PropUniq=PropUniq_m;
+			uint64_t *TotK = TotK_m, *TotUniq = TotUniq_m;
+			
 			uint64_t *FoundK = FoundK_m, *FoundUniq = FoundUniq_m;
+			uint32_t *PropK=PropK_m, *PropUniq=PropUniq_m;
+			uint32_t //*TotUniq_dedupe=TotUniq_dedupe_m, 
+				*FoundUniq_dedupe = FoundUniq_dedupe_m; // new
+			//uint32_t *PropUniq_dedupe = PropUniq_dedupe_m; // new
+			uint32_t *TotUniq_adamantium = TotUniq_adamantium_m, *FoundUniq_adamantium = FoundUniq_adamantium_m, *PropUniq_adamantium = PropUniq_adamantium_m; // new
+
+			//char kmer_str[64] = {0}, rc_str[64] = {0};
 			
 			if (tid) 
 				TotK = huge_calloc((uint64_t)numRef*sizeof(*TotK)),
@@ -1557,17 +1846,24 @@ int main(int argc, char *argv[]) {
 				FoundK = huge_calloc((uint64_t)numRef*sizeof(*FoundK)),
 				FoundUniq = huge_calloc((uint64_t)numRef*sizeof(*FoundUniq)),
 				PropK = huge_calloc((uint64_t)numRef*sizeof(*PropK)),
-				PropUniq = huge_calloc((uint64_t)numRef*sizeof(*PropK));
+				PropUniq = huge_calloc((uint64_t)numRef*sizeof(*PropUniq)),
+				FoundUniq_dedupe = huge_calloc((uint64_t)numRef*sizeof(*FoundUniq_dedupe));
+			if (tid && adamantium)
+				TotUniq_adamantium = huge_calloc((uint64_t)numRef*sizeof(*TotUniq_adamantium)),
+				FoundUniq_adamantium = huge_calloc((uint64_t)numRef*sizeof(*FoundUniq_adamantium)),
+				PropUniq_adamantium = huge_calloc((uint64_t)numRef*sizeof(*PropUniq_adamantium));
+				//TotUniq_dedupe = huge_calloc((uint64_t)numRef*sizeof(*TotUniq_dedupe)),
+				//PropUniq_dedupe = huge_calloc((uint64_t)numRef*sizeof(*PropUniq_dedupe)); // new
 			
 			#pragma omp for schedule(dynamic,1024)
 			for (uint64_t i = 0; i < nbins; ++i) {
 				if (Nibs[i+1] <= Nibs[i]) continue; // empty
 				uint32_t ambig = 0;
-				uint64_t end = Nibs[i+1], nd;
-				uint32_t mv = 0;
+				uint64_t end = Nibs[i+1], nd = 1, range = end-Nibs[i];
+				uint64_t mv = 0; // max count of this kmer
 				kmer_t thisK = KGrid[Nibs[i]].sfx+1;
 				
-				for (uint64_t j = Nibs[i]; j < end; j += nd) {
+				for (uint64_t j = Nibs[i]; j < end; j += nd) { // for each kmer suffix within this prefix
 					rix_t rix = KGrid[j].rix;
 					if (rix >= numRef) {
 						printf("ERROR: rix at bin %lu, nib %lu = %lu, >= numRef [%lu]. nbins = %lu\n",
@@ -1583,7 +1879,7 @@ int main(int argc, char *argv[]) {
 							mv = mv > QueryAligns[k] ? mv : QueryAligns[k],
 							ambig |= KGrid[k].rix ^ rix;
 					}
-					
+
 					// Find number of in-ref copies
 					nd = 1;
 					for (uint64_t k = j+1; k < end && 
@@ -1594,6 +1890,29 @@ int main(int argc, char *argv[]) {
 						TotUniq[rix] += nd;
 						FoundUniq[rix] += mv;
 						PropUniq[rix] += mv < nd ? mv : nd;
+
+						/* if (mv > 0) {
+							char prefix_str[64] = {0}, suffix_str[64] = {0};
+							num_to_dna(i, PL, prefix_str);
+							num_to_dna(thisK, SL, suffix_str);
+							printf("%s %s nd: %lu, mv: %lu\n", prefix_str, suffix_str, nd, mv);
+						} */
+						
+
+						FoundUniq_dedupe[rix] += mv/nd; // new
+						//TotUniq_dedupe[rix]++; // new 
+						//PropUniq_dedupe[rix] += mv > 0;
+						if (adamantium) {
+							// First look up this kmer in the adamantium table
+							uint64_t ix = skLBS(Adamant_Suffix + Adamant_Prefix[i],Adamant_Prefix[i+1]-Adamant_Prefix[i], thisK);
+							//printf("Looking up %lu in adamantium table for %lu (range from %lu to %lu): %lu\n",thisK,i,Adamant_Prefix[i],Adamant_Prefix[i+1],ix);	
+
+							if (ix == -1) {
+								TotUniq_adamantium[rix] += nd; // new
+								FoundUniq_adamantium[rix] += (uint32_t)( (double)mv/(double)nd + 0.5 ); // new
+								PropUniq_adamantium[rix] += mv < nd ? mv : nd; // new
+							}
+						}
 					}
 					TotK[rix] += nd;
 					FoundK[rix] += mv;
@@ -1606,6 +1925,13 @@ int main(int argc, char *argv[]) {
 					TotK_m[i] += TotK[i], TotUniq_m[i] += TotUniq[i],
 					FoundK_m[i] += FoundK[i], FoundUniq_m[i] += FoundUniq[i],
 					PropK_m[i] += PropK[i], PropUniq_m[i] += PropUniq[i];
+					FoundUniq_dedupe_m[i] += FoundUniq_dedupe[i];
+					if (adamantium)
+						TotUniq_adamantium_m[i] += TotUniq_adamantium[i], // new
+					FoundUniq_adamantium_m[i] += FoundUniq_adamantium[i], // new
+					PropUniq_adamantium_m[i] += PropUniq_adamantium[i]; // new
+					//TotUniq_dedupe_m[i] += TotUniq_dedupe[i]; // new
+					//PropUniq_dedupe_m[i] += PropUniq_dedupe[i]; // new
 				}
 			}
 		}
@@ -1619,21 +1945,43 @@ int main(int argc, char *argv[]) {
 		
 		//wtime = omp_get_wtime();
 		
+		double qkAvg = (double)n_raw / NQ;
+
 		FILE *out = fopen(covPath,"wb");
 		if (!out) {puts("ERROR: can't open output file!"); exit(2);}
 		setvbuf(out, 0, _IOFBF, 1<<22);
-		fprintf(out, "Reference\tKmers_found\t");
+		fprintf(out, "Reference\tRef_len\tTotal_kmers\tTotal_unique\tKmers_found\t");
 		fprintf(out, "Unique_kmers_found\tKmers_covered\tUnique_kmers_covered\t");
-		fprintf(out, "Proportion_covered\tUnique_proportion_covered\tReads_covered\n");
+
+		fprintf(out, "Proportion_covered\tUnique_proportion_covered\tReads_covered\t");
+		fprintf(out, "Exp\tSuspicion\tCoverage_est\tNum_reads_est"); //\tStrain\n");
+		if (adamantium) fprintf(out, "\tAdamantine_tot\tAdamantium_found\tAdamantium_covered"),
+			fprintf(out, "\tAdamantium_prop\tXCov_adamantium\tReads_covered_adamantium\n");
+		else fprintf(out,"\n");
 		//FILE *log = fopen("DbgPost.txt","wb");
 		for (uint32_t i = 0; i < numRef; ++i) {
 			//fprintf(log,"%u\t%s\n",i,RefNames[i]);
-
 			if (!FoundK_m[i]) continue;
-			fprintf(out,"%s\t%lu\t%lu\t%u\t%u",RefNames[i],//TotK_m[i],TotUniq_m[i],
-				FoundK_m[i],FoundUniq_m[i],PropK_m[i],PropUniq_m[i]);
-			fprintf(out,"\t%f\t%f\t%u\n",(double)PropK_m[i]/TotK_m[i],
-				(double)PropUniq_m[i]/TotUniq_m[i],FullQueryAligns[i]); 
+			
+			double xcov = (double)FoundUniq_dedupe_m[i]/TotUniq_m[i], ucov = (double)PropUniq_m[i]/TotUniq_m[i];
+			double //ucov_dd = (double)PropUniq_dedupe_m[i]/TotUniq_dedupe_m[i], 
+				pcov = (double)PropK_m[i]/TotK_m[i];
+			fprintf(out,"%s\t%u\t%lu\t%lu\t%u\t%u\t%u\t%u", RefNames[i],RefSizes[i],TotK_m[i], TotUniq_m[i], 
+				//TotUniq_dedupe_m[i], 
+				FoundK_m[i], FoundUniq_m[i],PropK_m[i],PropUniq_m[i]); //, ucov_dd);
+			
+			fprintf(out,"\t%f\t%f\t%u",
+				pcov, ucov, FullQueryAligns[i]);
+
+			double expc = 1 - exp(-xcov), susp = ucov ? log10(expc / ucov) : 0;
+			fprintf(out,"\t%f\t%f\t%f\t%u", expc, susp > 0 ? susp : 0, xcov, (uint32_t)(xcov*(RefSizes[i])/qkAvg + 0.5));
+				//,pcov/ucov > 0.9 && susp < .055 && ucov > .10 && (ucov > .5 || ucov*PropUniq_m[i] >= 5));
+			if (adamantium) {
+				double xcov_adamantium = (double)FoundUniq_adamantium_m[i]/TotUniq_adamantium_m[i], 
+					ucov_adamantium = (double)PropUniq_adamantium_m[i]/TotUniq_adamantium_m[i];
+				fprintf(out,"\t%u\t%u\t%u\t%f\t%f\t%u\n", TotUniq_adamantium_m[i], FoundUniq_adamantium_m[i], PropUniq_adamantium_m[i], 
+					ucov_adamantium,xcov_adamantium, (uint32_t)(xcov_adamantium*(RefSizes[i])/qkAvg + 0.5));
+			} else fprintf(out,"\n");
 		}
 		printf("--> Coverage table written [%f]\n",omp_get_wtime()-wtime);
 		fclose(out);
