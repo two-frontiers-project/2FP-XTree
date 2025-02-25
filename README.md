@@ -364,7 +364,7 @@ Bacteria;Firmicutes;Bacilli    Function1;Function4    100
 
 ## Conclusion
 
-XTree (CrossTree) is a powerful and flexible tool for metagenomic analysis, offering a balance between speed and accuracy. Its various output options and optimization features make it suitable for a wide range of metagenomic studies and large-scale sequence analysis projects.
+XTree is a powerful and flexible tool for metagenomic analysis, offering a balance between speed and accuracy. Its various output options and optimization features make it suitable for a wide range of metagenomic studies and large-scale sequence analysis projects.
 
 Key features include:
 - Fast k-mer-based sequence lookup and tallying
