@@ -2,7 +2,7 @@
 
 ## Overview
 
-XTree (CrossTree) is a fast, k-mer-based sequence lookup and tallying tool designed for efficient analysis of metagenomic data. It offers a range of functionalities including genome coverage analysis, maximum-likelihood read redistribution, cross-tabulation of annotation hierarchies, and per-query annotation and statistics.
+XTree is a fast, k-mer-based sequence lookup and tallying tool designed for efficient analysis of metagenomic data. It offers a range of functionalities including genome coverage analysis, maximum-likelihood read redistribution, cross-tabulation of annotation hierarchies, and per-query annotation and statistics.
 
 ## Version
 
