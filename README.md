@@ -8,6 +8,10 @@ XTree is a fast, k-mer-based sequence lookup and tallying tool designed for effi
 
 This documentation covers XTree version 2.00c.
 
+## Installation
+
+We provide a pre-built binary here. You can directly clone these repository and call the XTree executable, or you can download the release to the right. This version of XTree is compatible with XXX. 
+
 ## Features
 
 - Total and unique genome coverage analysis
@@ -361,6 +365,10 @@ Bacteria;Firmicutes;Bacilli    Function1;Function4    100
 
 - The program includes basic error checking for input file formats and command-line arguments
 - It will print error messages and exit if it encounters issues like malformed input files or invalid options
+ 
+## Post-Processing
+
+XTree provides various alignments statistics and coverage details. It is up to the user to use these thresholds. We provide recommendations in the XTree manuscript for coverage cutoffs (between 3% and 10% genome coverage for bacteria, for example), but users should make this decision based on their own data. We provide a helper R script for post-processing multiple alignment files in the scripts/ directory.
 
 ## Conclusion
 
