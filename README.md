@@ -1,4 +1,4 @@
-# XTree (CrossTree) Documentation
+# XTree Documentation
 
 ## Overview
 
