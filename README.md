@@ -27,6 +27,7 @@ We maintain and provide pre-built databases of the Genome Taxonomy Database, the
 | Reef Genomics DB | Feb 2025, k = 29, comp 2 | [Download Link](XXX) |
 
 Reef Genomics DB sourced from http://reefgenomics.org/. 
+Pan Viral Compendium sourced from https://figshare.com/articles/dataset/PVC_Release_V0_1/24566995?file=43154491.
 
 ## Features
 
