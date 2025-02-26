@@ -16,12 +16,12 @@ We provide a pre-built binary here. You can directly clone these repository and 
 
 We maintain and provide pre-built databases of the Genome Taxonomy Database, the Pan Viral Compendium, and some eukaryotic genome databases.
 
-| Name  | Version | Link |
+| Name  | Version Notes | Link |
 |-------|---------|------|
-| Genome Taxonomy Database | 214, k = 29 | [Download Link](https://s3.us-east-1.wasabisys.com/2fp/xtree/gtdb/gtdbr214_k29.xtr2) |
-| Pan Viral Compendium | V1, k = 21, comp 1 (complete high medium low quality genomes) | [Download Link](https://s3.us-east-1.wasabisys.com/2fp/xtree/pvc/v1/complete_high_medium_low_quality.fa.lin.fa.21.xtr) |
-| Pan Viral Compendium | V1, k = 21, comp 1 (complete high medium quality genomes) | [Download Link](https://s3.us-east-1.wasabisys.com/2fp/xtree/pvc/v1/complete_high_medium_quality.fa.lin.fa.21.xtr) |
-| Pan Viral Compendium | V1, k = 21, comp 1 (complete high quality genomes) | [Download Link](https://s3.us-east-1.wasabisys.com/2fp/xtree/pvc/v1/complete_high_quality.fa.lin.fa.21.xtr) |
+| Genome Taxonomy Database | release 214, k = 29, comp 1 | [Download Link](https://s3.us-east-1.wasabisys.com/2fp/xtree/gtdb/gtdbr214_k29.xtr2) |
+| Pan Viral Compendium | V1, k = 21, comp 1, complete high medium low quality genomes | [Download Link](https://s3.us-east-1.wasabisys.com/2fp/xtree/pvc/v1/complete_high_medium_low_quality.fa.lin.fa.21.xtr) |
+| Pan Viral Compendium | V1, k = 21, comp 1, complete high medium quality genomes | [Download Link](https://s3.us-east-1.wasabisys.com/2fp/xtree/pvc/v1/complete_high_medium_quality.fa.lin.fa.21.xtr) |
+| Pan Viral Compendium | V1, k = 21, comp 1, complete high quality genomes | [Download Link](https://s3.us-east-1.wasabisys.com/2fp/xtree/pvc/v1/complete_high_quality.fa.lin.fa.21.xtr) |
 | GenBank Fungi | May 2024, k = 29, comp 2 | [Download Link](XXX) |
 | GenBank Protozoa | April 2024, k = 29, comp 2 | [Download Link](XXX) |
 | Reef Genomics DB | Feb 2025, k = 29, comp 2 | [Download Link](XXX) |
@@ -143,7 +143,6 @@ Align mode processes query sequences against the XTree database.
 ## Conclusion
 
 XTree provides a powerful and flexible tool for analyzing metagenomic data, offering a balance between speed and accuracy. Its various output options and optimization features make it suitable for a wide range of metagenomic studies and large-scale sequence analysis projects. Users should refer to the detailed addendum for in-depth information on database structure, input formats, output details, and advanced features.
-
 
 # Addendum: Comprehensive XTree Documentation
 
