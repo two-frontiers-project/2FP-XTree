@@ -12,6 +12,22 @@ This documentation covers XTree version 2.00c.
 
 We provide a pre-built binary here. You can directly clone these repository and call the XTree executable, or you can download the release to the right. This version of XTree is compatible with XXX. 
 
+## Pre-built databases
+
+We maintain and provide pre-built databases of the Genome Taxonomy Database, the Pan Viral Compendium, and some eukaryotic genome databases.
+
+| Name  | Version | Link |
+|-------|---------|------|
+| Genome Taxonomy Database | 214, k = 29 | [Download Link](https://s3.us-east-1.wasabisys.com/2fp/xtree/gtdb/gtdbr214_k29.xtr2) |
+| Pan Viral Compendium | V1 (complete high medium low quality genomes) | [Download Link](https://s3.us-east-1.wasabisys.com/2fp/xtree/pvc/v1/complete_high_medium_low_quality.fa.lin.fa.21.xtr) |
+| Pan Viral Compendium | V1 (complete high medium quality genomes) | [Download Link](https://s3.us-east-1.wasabisys.com/2fp/xtree/pvc/v1/complete_high_medium_quality.fa.lin.fa.21.xtr) |
+| Pan Viral Compendium | V1 (complete high quality genomes) | [Download Link](https://s3.us-east-1.wasabisys.com/2fp/xtree/pvc/v1/complete_high_quality.fa.lin.fa.21.xtr) |
+| GenBank Fungi | May 2024 | [Download Link](XXX) |
+| GenBank Protozoa | April 2024 | [Download Link](XXX) |
+| Reef Genomics DB | Feb 2025 | [Download Link](XXX) |
+
+Reef Genomics DB sourced from http://reefgenomics.org/. 
+
 ## Features
 
 - Total and unique genome coverage analysis
