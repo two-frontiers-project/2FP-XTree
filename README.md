@@ -10,7 +10,7 @@ This documentation covers XTree version 2.00c.
 
 ## Installation
 
-We provide a pre-built binary here. You can directly clone these repository and call the XTree executable, or you can download the release to the right. This version of XTree is compatible with XXX. 
+We provide a pre-built binary here. You can directly clone these repository and call the XTree executable, or you can download the release to the right. This version of XTree is compatible with Linux 3.1 and later, with x86 CPUs with at least AVX1. 
 
 ## Pre-built databases
 
