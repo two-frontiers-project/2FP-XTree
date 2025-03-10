@@ -18,14 +18,17 @@ process_cov_file <- function(file) {
 }
 
 file_dfs <- lapply(cov_files, process_cov_file)
+file_dfs <- Filter(function(df) !is.null(df) && nrow(df) > 0, file_dfs)  # Remove empty dataframes
+
 all_data <- bind_rows(file_dfs)
 all_data <- all_data %>% filter(coverage >= 0.05)
 
 ### EXAMPLE, COMMENTED OUT, AS TO HOW YOU COULD MERGE IN GTDB TAXONOMY                                                                                                                                                               
-# Load taxonomy data
-#taxonomy_df <- read.delim("/mnt/b/gtdb_r220/bac120_taxonomy.tsv", header = FALSE, stringsAsFactors = FALSE)
-#colnames(taxonomy_df) <- c("Reference", "taxonomy")
-#all_data <- inner_join(all_data, taxonomy_df, by = "Reference")
+taxonomy_df <- read.delim("/mnt/b/gtdb_r220/bac120_taxonomy.tsv", header = FALSE, stringsAsFactors = FALSE)
+colnames(taxonomy_df) <- c("Reference", "taxonomy")
+taxonomy_df$Reference = gsub('RS_','',taxonomy_df$Reference)
+taxonomy_df$Reference = gsub('GB_','',taxonomy_df$Reference)
+all_data <- inner_join(all_data, taxonomy_df, by = "Reference")
 
 all_data = all_data %>% reshape2::dcast(Reference ~ sample,value.var = 'RA')
 all_data[is.na(RA)] = 0                                                                                                                                                                                        
