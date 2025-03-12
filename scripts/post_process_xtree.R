@@ -21,7 +21,7 @@ file_dfs <- lapply(cov_files, process_cov_file)
 file_dfs <- Filter(function(df) !is.null(df) && nrow(df) > 0, file_dfs)  # Remove empty dataframes
 
 all_data <- bind_rows(file_dfs)
-all_data <- all_data %>% filter(coverage >= 0.05)
+all_data <- all_data %>% filter(coverage >= COVERAGE_CUTOFF)
 
 ### EXAMPLE, COMMENTED OUT, AS TO HOW YOU COULD MERGE IN GTDB TAXONOMY                                                                                                                                                               
 taxonomy_df <- read.delim("/mnt/b/gtdb_r220/bac120_taxonomy.tsv", header = FALSE, stringsAsFactors = FALSE)
