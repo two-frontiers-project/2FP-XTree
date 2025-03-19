@@ -24,7 +24,7 @@ We maintain and provide pre-built databases of the Genome Taxonomy Database, the
 | Pan Viral Compendium | V1, k = 21, comp 1, complete high quality genomes | [Download Link](https://s3.us-east-1.wasabisys.com/2fp/xtree/pvc/v1/complete_high_quality.fa.lin.fa.21.xtr) |
 | GenBank Fungi | May 2024, k = 29, comp 2 | [Download Link](https://s3.us-east-1.wasabisys.com/2fp/xtree/genbank/genbank_fungi.xtr2) |
 | GenBank Protozoa | April 2024, k = 29, comp 2 | [Download Link](https://s3.us-east-1.wasabisys.com/2fp/xtree/genbank/genbank_protozoa_derepped.xtr2) |
-| Reef Genomics DB | Feb 2025, k = 29, comp 2 | [Download Link](https://s3.us-east-1.wasabisys.com/2fp/xtree/reefgenomicsFeb25/coraleuks_comp2.xtr2) |
+| Reef Genomics DB | Feb 2025, k = 29, comp 2 (just corals and associated algal synbionts, no sponges) | [Download Link](https://s3.us-east-1.wasabisys.com/2fp/xtree/reefgenomicsFeb25/coraleuks_comp2.xtr2) |
 
 Reef Genomics DB sourced from http://reefgenomics.org/. 
 Pan Viral Compendium sourced from https://figshare.com/articles/dataset/PVC_Release_V0_1/24566995?file=43154491.
