@@ -18,6 +18,7 @@ We maintain and provide pre-built databases of the Genome Taxonomy Database, the
 
 | Name  | Version Notes | Link |
 |-------|---------|------|
+| Genome Taxonomy Database | release 220, k = 29, comp 1 | [Download Link](https://s3.us-east-1.wasabisys.com/2fp/xtree/gtdb/gtdb_r220_oct24.xtr2) |
 | Genome Taxonomy Database | release 214, k = 29, comp 1 | [Download Link](https://s3.us-east-1.wasabisys.com/2fp/xtree/gtdb/gtdbr214_k29.xtr2) |
 | Pan Viral Compendium | V1, k = 21, comp 1, complete high medium low quality genomes | [Download Link](https://s3.us-east-1.wasabisys.com/2fp/xtree/pvc/v1/complete_high_medium_low_quality.fa.lin.fa.21.xtr) |
 | Pan Viral Compendium | V1, k = 21, comp 1, complete high medium quality genomes | [Download Link](https://s3.us-east-1.wasabisys.com/2fp/xtree/pvc/v1/complete_high_medium_quality.fa.lin.fa.21.xtr) |
