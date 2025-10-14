@@ -14,7 +14,7 @@ cov_files <- list.files(".", pattern = "\\.cov$", full.names = TRUE)
 #cov_files = cov_files[grepl('sub',cov_files)]
 
 process_cov_file <- function(file) {
-  df <- read.delim(file, stringsAsFactors = FALSE) %>% mutate(sample = file)%>% mutate(min_coverage = pmin(Adamantium_covered,Unique_proportion_covered,Proportion_covered)) %>% mutate(RA = Coverage_est/sum(Coverage_est))
+  df <- read.delim(file, stringsAsFactors = FALSE) %>% mutate(sample = file)%>% mutate(min_coverage = pmin(Adamantium_prop,Unique_proportion_covered,Proportion_covered)) %>% mutate(RA = Coverage_est/sum(Coverage_est))
   return(df)
 }
 
